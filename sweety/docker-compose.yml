@@ -1,0 +1,68 @@
+# Start everything:          docker compose up --build   -> app on http://localhost:8080
+# Only the backing services: docker compose up -d db redis   (for local development)
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sweety
+      POSTGRES_PASSWORD: sweety
+      POSTGRES_DB: sweety
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sweety -d sweety"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  server:
+    build: ./server
+    environment: &server-env
+      PORT: 4000
+      DATABASE_URL: postgres://sweety:sweety@db:5432/sweety
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-real-deployments}
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Kolkata}
+      REMINDER_CRON: ${REMINDER_CRON:-0 20 * * *}
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Background worker: schedules and runs the daily reminder job (BullMQ)
+  worker:
+    build: ./server
+    command: ["node", "src/worker.js"]
+    environment: *server-env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      server:
+        condition: service_started
+
+  client:
+    build: ./client
+    ports:
+      - "8080:80"
+    depends_on:
+      - server
+
+volumes:
+  pgdata:
